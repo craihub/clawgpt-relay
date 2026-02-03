@@ -1,0 +1,16 @@
+{
+  "name": "clawgpt-relay",
+  "version": "1.0.0",
+  "description": "WebSocket relay server for ClawGPT remote access",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["clawgpt", "relay", "websocket"],
+  "author": "Curve Reality",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

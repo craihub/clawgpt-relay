@@ -20,6 +20,9 @@ const CONFIG = {
   UNCLAIMED_EXPIRY_MS: 5 * 60 * 1000,      // 5 minutes
   ACTIVE_EXPIRY_MS: 24 * 60 * 60 * 1000,   // 24 hours
   
+  // Named room expiry: 7 days inactive (for persistence)
+  ROOM_EXPIRY_MS: 7 * 24 * 60 * 60 * 1000, // 7 days
+  
   // Rate limiting
   MAX_CHANNELS_PER_IP: 10,                  // Max active channels per IP
   CHANNEL_CREATE_COOLDOWN_MS: 1000,         // Min time between channel creations
@@ -27,6 +30,10 @@ const CONFIG = {
   // Cleanup interval
   CLEANUP_INTERVAL_MS: 60 * 1000            // Check for stale channels every minute
 };
+
+// Named rooms storage: roomId -> { host, client, created, lastActivity }
+// Unlike channels, rooms persist and support reconnection
+const rooms = new Map();
 
 // Channel storage: channelId -> { host, client, created, lastActivity, claimed }
 const channels = new Map();
@@ -130,12 +137,35 @@ function cleanupChannels() {
     }
   }
   
+  // Clean up stale rooms (7 days inactive)
+  for (const [roomId, room] of rooms) {
+    const idleTime = now - room.lastActivity;
+    if (idleTime > CONFIG.ROOM_EXPIRY_MS) {
+      console.log(`[cleanup] Removing stale room: ${roomId.substring(0, 8)}...`);
+      closeRoom(roomId);
+    }
+  }
+  
   // Clean up old IP limits
   for (const [ip, limit] of ipLimits) {
     if (now - limit.lastCreate > 3600000) { // 1 hour
       ipLimits.delete(ip);
     }
   }
+}
+
+// Close and remove a room
+function closeRoom(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  
+  if (room.host && room.host.readyState === WebSocket.OPEN) {
+    room.host.close(1000, 'Room closed');
+  }
+  if (room.client && room.client.readyState === WebSocket.OPEN) {
+    room.client.close(1000, 'Room closed');
+  }
+  rooms.delete(roomId);
 }
 
 // Close and remove a channel
@@ -206,6 +236,115 @@ wss.on('connection', (ws, req) => {
     
     ws.on('message', (data) => handleHostMessage(ws, channelId, data));
     ws.on('close', () => handleHostDisconnect(channelId));
+    
+  } else if (path.startsWith('/room/')) {
+    // Named room - persistent channel that both sides can reconnect to
+    const roomId = path.substring(6); // Remove '/room/' prefix
+    
+    // Validate room ID (alphanumeric + hyphens, 8-64 chars)
+    if (!/^[a-zA-Z0-9-]{8,64}$/.test(roomId)) {
+      ws.send(JSON.stringify({
+        type: 'relay',
+        event: 'error',
+        error: 'Invalid room ID. Use 8-64 alphanumeric characters or hyphens.'
+      }));
+      ws.close();
+      return;
+    }
+    
+    let room = rooms.get(roomId);
+    const now = Date.now();
+    
+    if (!room) {
+      // Create new room
+      room = {
+        host: null,
+        client: null,
+        created: now,
+        lastActivity: now
+      };
+      rooms.set(roomId, room);
+      console.log(`[room] Created: ${roomId.substring(0, 8)}...`);
+    }
+    
+    room.lastActivity = now;
+    
+    // Determine role: first connection becomes host, second becomes client
+    // If host slot is empty or disconnected, take it
+    if (!room.host || room.host.readyState !== WebSocket.OPEN) {
+      // Become host
+      if (room.host) {
+        // Clean up old host reference
+        room.host = null;
+      }
+      
+      room.host = ws;
+      ws.roomId = roomId;
+      ws.role = 'host';
+      ws.isRoom = true;
+      
+      ws.send(JSON.stringify({
+        type: 'relay',
+        event: 'room.joined',
+        roomId: roomId,
+        role: 'host',
+        clientConnected: room.client && room.client.readyState === WebSocket.OPEN
+      }));
+      
+      // Notify client if present
+      if (room.client && room.client.readyState === WebSocket.OPEN) {
+        room.client.send(JSON.stringify({
+          type: 'relay',
+          event: 'host.connected'
+        }));
+      }
+      
+      console.log(`[room] Host joined: ${roomId.substring(0, 8)}...`);
+      
+      ws.on('message', (data) => handleRoomMessage(ws, roomId, 'host', data));
+      ws.on('close', () => handleRoomDisconnect(roomId, 'host'));
+      
+    } else if (!room.client || room.client.readyState !== WebSocket.OPEN) {
+      // Become client
+      if (room.client) {
+        room.client = null;
+      }
+      
+      room.client = ws;
+      ws.roomId = roomId;
+      ws.role = 'client';
+      ws.isRoom = true;
+      
+      ws.send(JSON.stringify({
+        type: 'relay',
+        event: 'room.joined',
+        roomId: roomId,
+        role: 'client',
+        hostConnected: room.host && room.host.readyState === WebSocket.OPEN
+      }));
+      
+      // Notify host
+      if (room.host && room.host.readyState === WebSocket.OPEN) {
+        room.host.send(JSON.stringify({
+          type: 'relay',
+          event: 'client.connected'
+        }));
+      }
+      
+      console.log(`[room] Client joined: ${roomId.substring(0, 8)}...`);
+      
+      ws.on('message', (data) => handleRoomMessage(ws, roomId, 'client', data));
+      ws.on('close', () => handleRoomDisconnect(roomId, 'client'));
+      
+    } else {
+      // Room is full
+      ws.send(JSON.stringify({
+        type: 'relay',
+        event: 'error',
+        error: 'Room is full (host and client both connected)'
+      }));
+      ws.close();
+    }
     
   } else if (match) {
     // Client joining existing channel
@@ -333,8 +472,53 @@ function handleClientDisconnect(channelId) {
   channel.client = null;
 }
 
+// Room message handlers
+function handleRoomMessage(ws, roomId, role, data) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  
+  room.lastActivity = Date.now();
+  
+  // Forward to the other party
+  const target = role === 'host' ? room.client : room.host;
+  if (target && target.readyState === WebSocket.OPEN) {
+    target.send(data.toString());
+  }
+}
+
+function handleRoomDisconnect(roomId, role) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  
+  console.log(`[room] ${role} disconnected: ${roomId.substring(0, 8)}...`);
+  
+  if (role === 'host') {
+    // Notify client that host disconnected (but room persists!)
+    if (room.client && room.client.readyState === WebSocket.OPEN) {
+      room.client.send(JSON.stringify({
+        type: 'relay',
+        event: 'host.disconnected'
+      }));
+    }
+    room.host = null;
+  } else {
+    // Notify host that client disconnected
+    if (room.host && room.host.readyState === WebSocket.OPEN) {
+      room.host.send(JSON.stringify({
+        type: 'relay',
+        event: 'client.disconnected'
+      }));
+    }
+    room.client = null;
+  }
+  
+  // Note: Unlike channels, rooms persist even when empty
+  // They'll be cleaned up after 7 days of inactivity
+}
+
 server.listen(PORT, () => {
   console.log(`ClawGPT Relay Server running on port ${PORT}`);
   console.log(`Security: E2E encrypted, single-client channels, UUID v4 IDs`);
+  console.log(`Persistent rooms: /room/{name} for reconnection support`);
   console.log(`Health check: http://localhost:${PORT}/health`);
 });

@@ -1,51 +1,112 @@
 # ClawGPT Relay Server
 
-WebSocket relay that bridges ClawGPT desktop and mobile clients for remote access.
+WebSocket relay that bridges ClawGPT desktop and mobile clients for secure remote access.
 
-## How it works
+## 🔒 Security
 
-1. **Desktop** connects to `/new` → gets a unique channel ID
-2. **QR code** contains the relay URL + channel ID
-3. **Phone** scans QR, connects to `/channel/{id}`
-4. **Relay** bridges all messages between them
+ClawGPT Relay is designed with security as a priority. We use industry-standard cryptography to ensure your data stays private.
+
+### End-to-End Encryption
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| **E2E Encryption** | ✅ | All messages encrypted with XSalsa20-Poly1305 |
+| **Key Exchange** | ✅ | X25519 (Curve25519) Diffie-Hellman |
+| **Zero-Knowledge Relay** | ✅ | Relay only sees encrypted blobs, never plaintext |
+| **Visual Verification** | ✅ | Matching emoji on both devices confirms secure connection |
+| **Forward Secrecy** | ✅ | New keypair generated for each session |
+
+### How It Works
 
 ```
-Desktop ←──WebSocket──→ Relay ←──WebSocket──→ Phone
+┌─────────┐                  ┌─────────┐                  ┌─────────┐
+│ Desktop │                  │  Relay  │                  │  Phone  │
+└────┬────┘                  └────┬────┘                  └────┬────┘
+     │                            │                            │
+     │  1. Connect + get channel  │                            │
+     │ ─────────────────────────> │                            │
+     │                            │                            │
+     │  2. QR code contains:      │                            │
+     │     - Channel ID           │                            │
+     │     - Desktop PUBLIC key   │                            │
+     │     (NOT your auth token!) │                            │
+     │                            │                            │
+     │                            │  3. Phone scans QR         │
+     │                            │ <───────────────────────── │
+     │                            │                            │
+     │  4. Phone sends its        │                            │
+     │     public key             │                            │
+     │ <───────────────────────── │ <───────────────────────── │
+     │                            │                            │
+     │  5. Both derive shared     │                            │
+     │     secret (X25519)        │     Same shared secret     │
+     │                            │                            │
+     │  6. All messages encrypted │  Relay sees only           │
+     │ ══════════════════════════>│  encrypted blobs           │
+     │                            │ ══════════════════════════>│
+     │                            │                            │
+     │  7. Visual verification:   │                            │
+     │     🐶🌮🚀🎸 shown on both │     🐶🌮🚀🎸              │
+     └────────────────────────────┴────────────────────────────┘
+```
+
+### Cryptographic Details
+
+- **Key Exchange**: X25519 (Curve25519 Diffie-Hellman)
+- **Encryption**: XSalsa20-Poly1305 (authenticated encryption)
+- **Nonce**: 24 random bytes per message (never reused)
+- **Library**: [TweetNaCl.js](https://tweetnacl.js.org/) - audited, battle-tested
+
+### What This Means
+
+- ✅ **We can't read your messages** - even if we wanted to
+- ✅ **Man-in-the-middle attacks prevented** - visual verification catches them
+- ✅ **Your auth token never touches the relay** - encrypted end-to-end
+- ✅ **Each session is unique** - compromising one doesn't affect others
+
+---
+
+## How It Works
+
+1. **Desktop** connects to `/new` → gets a unique channel ID
+2. **QR code** contains the relay URL + channel ID + desktop's public key
+3. **Phone** scans QR, connects to `/channel/{id}`
+4. **Key exchange** happens, shared secret derived
+5. **All traffic** is encrypted end-to-end
+
+```
+Desktop ←──🔐 Encrypted ──→ Relay ←──🔐 Encrypted ──→ Phone
 ```
 
 ## API
 
 ### Create new channel (Desktop)
 ```
-ws://relay.clawgpt.com/new
+wss://clawgpt-relay.fly.dev/new
 ```
 Returns: `{ type: "relay", event: "channel.created", channelId: "abc123" }`
 
 ### Join channel (Phone)
 ```
-ws://relay.clawgpt.com/channel/abc123
+wss://clawgpt-relay.fly.dev/channel/abc123
 ```
 Returns: `{ type: "relay", event: "channel.joined", role: "client", hostConnected: true }`
 
 ### Health check
 ```
-GET /health
+GET https://clawgpt-relay.fly.dev/health
 ```
 
-## Running locally
+## Self-Hosting
+
+Don't trust our relay? Run your own!
+
+### Local Development
 
 ```bash
 npm install
 npm start
 ```
-
-## Deployment
-
-Deploy anywhere that supports Node.js + WebSockets:
-- Fly.io
-- Railway
-- Render
-- VPS with Docker
 
 ### Docker
 
@@ -61,6 +122,26 @@ fly launch
 fly deploy
 ```
 
+### Other Platforms
+
+Deploy anywhere that supports Node.js + WebSockets:
+- Railway
+- Render
+- DigitalOcean App Platform
+- Any VPS
+
 ## Environment Variables
 
-- `PORT` - Server port (default: 8787)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 8787 | Server port |
+
+## Security Reporting
+
+Found a vulnerability? Please report it responsibly:
+- Open a GitHub issue (for non-critical issues)
+- For critical vulnerabilities, contact us directly before public disclosure
+
+## License
+
+MIT

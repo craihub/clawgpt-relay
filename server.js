@@ -304,10 +304,18 @@ wss.on('connection', (ws, req) => {
       ws.on('message', (data) => handleRoomMessage(ws, roomId, 'host', data));
       ws.on('close', () => handleRoomDisconnect(roomId, 'host'));
       
-    } else if (!room.client || room.client.readyState !== WebSocket.OPEN) {
-      // Become client
-      if (room.client) {
-        room.client = null;
+    } else {
+      // Client slot - replace any existing client (handles reconnection)
+      // This allows the same phone to reconnect after app restart
+      if (room.client && room.client.readyState === WebSocket.OPEN) {
+        // Close old client connection gracefully
+        console.log(`[room] Replacing existing client in: ${roomId.substring(0, 8)}...`);
+        room.client.send(JSON.stringify({
+          type: 'relay',
+          event: 'replaced',
+          reason: 'Another client connected to this room'
+        }));
+        room.client.close();
       }
       
       room.client = ws;
@@ -335,15 +343,6 @@ wss.on('connection', (ws, req) => {
       
       ws.on('message', (data) => handleRoomMessage(ws, roomId, 'client', data));
       ws.on('close', () => handleRoomDisconnect(roomId, 'client'));
-      
-    } else {
-      // Room is full
-      ws.send(JSON.stringify({
-        type: 'relay',
-        event: 'error',
-        error: 'Room is full (host and client both connected)'
-      }));
-      ws.close();
     }
     
   } else if (match) {

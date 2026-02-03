@@ -13,7 +13,7 @@ ClawGPT Relay is designed with security as a priority. We use industry-standard 
 | **E2E Encryption** | ✅ | All messages encrypted with XSalsa20-Poly1305 |
 | **Key Exchange** | ✅ | X25519 (Curve25519) Diffie-Hellman |
 | **Zero-Knowledge Relay** | ✅ | Relay only sees encrypted blobs, never plaintext |
-| **Visual Verification** | ✅ | Matching emoji on both devices confirms secure connection |
+| **Visual Verification** | ✅ | Matching words on both devices confirms secure connection |
 | **Forward Secrecy** | ✅ | New keypair generated for each session |
 
 ### How It Works
@@ -46,7 +46,7 @@ ClawGPT Relay is designed with security as a priority. We use industry-standard 
      │                            │ ══════════════════════════>│
      │                            │                            │
      │  7. Visual verification:   │                            │
-     │     🐶🌮🚀🎸 shown on both │     🐶🌮🚀🎸              │
+     │     apple-tiger-castle-moon│  apple-tiger-castle-moon   │
      └────────────────────────────┴────────────────────────────┘
 ```
 

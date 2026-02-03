@@ -302,7 +302,7 @@ wss.on('connection', (ws, req) => {
       console.log(`[room] Host joined: ${roomId.substring(0, 8)}...`);
       
       ws.on('message', (data) => handleRoomMessage(ws, roomId, 'host', data));
-      ws.on('close', () => handleRoomDisconnect(roomId, 'host'));
+      ws.on('close', () => handleRoomDisconnect(roomId, 'host', ws));
       
     } else {
       // Client slot - replace any existing client (handles reconnection)
@@ -342,7 +342,7 @@ wss.on('connection', (ws, req) => {
       console.log(`[room] Client joined: ${roomId.substring(0, 8)}...`);
       
       ws.on('message', (data) => handleRoomMessage(ws, roomId, 'client', data));
-      ws.on('close', () => handleRoomDisconnect(roomId, 'client'));
+      ws.on('close', () => handleRoomDisconnect(roomId, 'client', ws));
     }
     
   } else if (match) {
@@ -485,9 +485,21 @@ function handleRoomMessage(ws, roomId, role, data) {
   }
 }
 
-function handleRoomDisconnect(roomId, role) {
+function handleRoomDisconnect(roomId, role, ws) {
   const room = rooms.get(roomId);
   if (!room) return;
+  
+  // IMPORTANT: Only process if this WebSocket is still the current one
+  // This prevents race conditions when a new connection replaces an old one
+  // and the old one's close event fires after
+  if (role === 'host' && room.host !== ws) {
+    console.log(`[room] Ignoring stale host disconnect for: ${roomId.substring(0, 8)}...`);
+    return;
+  }
+  if (role === 'client' && room.client !== ws) {
+    console.log(`[room] Ignoring stale client disconnect for: ${roomId.substring(0, 8)}...`);
+    return;
+  }
   
   console.log(`[room] ${role} disconnected: ${roomId.substring(0, 8)}...`);
   

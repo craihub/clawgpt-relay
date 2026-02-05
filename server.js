@@ -185,6 +185,18 @@ function closeChannel(channelId) {
 // Run cleanup periodically
 setInterval(cleanupChannels, CONFIG.CLEANUP_INTERVAL_MS);
 
+// Keepalive ping every 30s to prevent proxy/NAT idle timeouts (e.g. Fly.io)
+setInterval(() => {
+  for (const [, room] of rooms) {
+    if (room.host && room.host.readyState === WebSocket.OPEN) room.host.ping();
+    if (room.client && room.client.readyState === WebSocket.OPEN) room.client.ping();
+  }
+  for (const [, channel] of channels) {
+    if (channel.host && channel.host.readyState === WebSocket.OPEN) channel.host.ping();
+    if (channel.client && channel.client.readyState === WebSocket.OPEN) channel.client.ping();
+  }
+}, 30000);
+
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const path = url.pathname;
